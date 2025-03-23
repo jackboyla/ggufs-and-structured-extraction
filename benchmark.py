@@ -149,8 +149,11 @@ def main():
         "Article_5": "The Cook Islands is proving that sustainable tourism isn't just possible – it's essential. Here's how this South Pacific nation is preserving their paradise for generations for come. Landing on Rarotonga, the largest of the Cook Islands chain felt like stepping back in time. ..."
     }
 
+    output_dir = "benchmark_data"
+    os.makedirs(output_dir, exist_ok=True)
+
     # Save the input articles to a JSONL file
-    input_filename = "inputs.jsonl"
+    input_filename = os.join(output_dir, "input_articles.jsonl")
     with open(input_filename, "w", encoding="utf-8") as f:
         for text_id, text in texts.items():
             json_obj = {"text_id": text_id, "text": text}
@@ -174,11 +177,13 @@ def main():
             result = run_benchmark(model, text, extraction_type="default")
             result["text_id"] = text_id
             benchmarks.append(result)
+        stop_running_models()
     for model in nuextract_models:
         for text_id, text in texts.items():
             result = run_benchmark(model, text, extraction_type="nuextract")
             result["text_id"] = text_id
             benchmarks.append(result)
+        stop_running_models()
 
     # Save outputs for each model to separate JSONL files
     outputs_by_model = {}
@@ -186,8 +191,6 @@ def main():
         model = res["model"]
         outputs_by_model.setdefault(model, []).append(res)
 
-    output_dir = "outputs"
-    os.makedirs(output_dir, exist_ok=True)
     for model, results in outputs_by_model.items():
         safe_model_name = model.replace("/", "_").replace(":", "_")
         output_filename = os.path.join(output_dir, f"outputs_{safe_model_name}.jsonl")

@@ -113,26 +113,27 @@ def run_benchmark(model, article_text, extraction_type="default"):
     print(f"Benchmarking model: {model} | Tokens: {num_tokens}")
     start_time = time.time()
 
+    error_occurred = False
+    response = requests.post(url, json=payload)
+    elapsed = time.time() - start_time
+    raw_output = response.content.decode('utf-8')
+    parsed_output = json.loads(raw_output)
+    message_content = parsed_output["message"]["content"]
     try:
-        response = requests.post(url, json=payload)
-        elapsed = time.time() - start_time
-        raw_output = response.content.decode('utf-8')
-        try:
-            parsed_output = json.loads(raw_output)
-        except Exception as e:
-            parsed_output = f"ERROR: {str(e)} {raw_output}"
+        graph = json.loads(message_content)
     except Exception as e:
-        elapsed = None
-        raw_output = f"ERROR: {str(e)}"
-        parsed_output = raw_output
+        parsed_output = f"ERROR: {str(e)} {message_content}"
+        error_occurred = True
+        print(f"Error parsing output for model {model}")
 
     result = {
+        "output": parsed_output,
+        "error": error_occurred,
         "model": model,
         "extraction_type": extraction_type,
         "num_tokens": num_tokens,
         "processing_time": elapsed,
-        "response_status": response.status_code if 'response' in locals() and response is not None else None,
-        "output": parsed_output
+        "response_status": response.status_code if 'response' in locals() and response is not None else None
     }
     return result
 
@@ -153,7 +154,7 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     # Save the input articles to a JSONL file
-    input_filename = os.join(output_dir, "input_articles.jsonl")
+    input_filename = os.path.join(output_dir, "input_articles.jsonl")
     with open(input_filename, "w", encoding="utf-8") as f:
         for text_id, text in texts.items():
             json_obj = {"text_id": text_id, "text": text}
@@ -171,7 +172,7 @@ def main():
         "hf.co/MaziyarPanahi/NuExtract-1.5-smol-GGUF:Q6_K"
     ]
 
-    # Run benchmarks for each text and model
+    # Run benchmarks for each model and text
     for model in default_models:
         for text_id, text in texts.items():
             result = run_benchmark(model, text, extraction_type="default")
@@ -215,6 +216,9 @@ def main():
 
     plt.figure(figsize=(8, 6))
     for res in benchmarks:
+        label = res["text_id"]
+        if res.get("error", False):
+            label += " (ERROR)"
         plt.scatter(
             res["num_tokens"], res["processing_time"],
             marker=markers[res["extraction_type"]],
@@ -222,7 +226,7 @@ def main():
             s=100,
             label=f"{res['model']} ({res['extraction_type']})"
         )
-        plt.text(res["num_tokens"]+1, res["processing_time"]+0.1, res["text_id"], fontsize=8)
+        plt.text(res["num_tokens"]+1, res["processing_time"]+0.1, label, fontsize=8)
     plt.xlabel("Approx. Prompt Token Count")
     plt.ylabel("Processing Time (seconds)")
     plt.title("Processing Time vs. Number of Prompt Tokens")

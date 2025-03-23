@@ -1,3 +1,6 @@
+
+## Creating a GGUF model
+
 1. Run download_snapshot.py for your desired model
 2. Clone llama.cpp. Ideally use the latest version, but if there is no `convert_hf_to_gguf.py` file, you can run `git checkout 19d8762`.
 3. `pip install -r llama.cpp/requirements.txt`
@@ -9,10 +12,13 @@ python llama.cpp/convert_hf_to_gguf.py create-gguf/Phi-3-mini-4k-instruct-graph 
   --outtype q8_0
 ```
 
+## Adding a model to Huggingface
+
 To add to a huggingface model repo, follow [these steps](https://huggingface.co/docs/hub/en/repositories-getting-started#terminal)
 
-To clear huggingface cache:
-```bash
-pip install -U "huggingface_hub[cli]"
-huggingface-cli delete-cache
-```
+> [!TIP]
+> To clear huggingface cache:
+> ```bash
+> pip install -U "huggingface_hub[cli]"
+> huggingface-cli delete-cache
+> ```

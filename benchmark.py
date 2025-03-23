@@ -3,11 +3,11 @@ import subprocess
 import requests
 import time
 import json
+import os
 import matplotlib.pyplot as plt
 
 # --- Stop all running Ollama models ---
 def stop_running_models():
-    # This uses shell commands similar to the notebook cell.
     stop_command = r"ollama ps | awk 'NR>1 {print $1}' | xargs -L 1 -I {} ollama stop {}"
     print("Stopping running Ollama models (if any)...")
     subprocess.run(stop_command, shell=True)
@@ -15,14 +15,13 @@ def stop_running_models():
 
 # --- Approximate token count function ---
 def calculate_num_tokens(messages):
-    # Very rough approximation: 1 token ~ 4 characters
+    # Rough approximation: 1 token ~ 4 characters
     num_tokens = 0
     for message in messages:
         num_tokens += len(message['content']) / 4
     return int(num_tokens)
 
 # --- Message builders ---
-
 def get_default_messages(article_text):
     system_instructions = """
 A chat between a curious user and an artificial intelligence Assistant. The Assistant is an expert at identifying entities and relationships in text. The Assistant responds in JSON output only.
@@ -60,7 +59,6 @@ The Assistant responds to the User in JSON only, according to the following JSON
     return messages
 
 def get_nuextract_messages(article_text):
-    # Create a pretty JSON template and build the prompt as required by NuExtract.
     template = {
         "Nodes": [
             {
@@ -86,7 +84,7 @@ def get_nuextract_messages(article_text):
 
 # --- Benchmark runner function ---
 def run_benchmark(model, article_text, extraction_type="default"):
-    # Select proper message builder and options based on extraction type
+    # Build the message list and options based on extraction type
     if extraction_type == "default":
         messages = get_default_messages(article_text)
         options = {
@@ -94,13 +92,10 @@ def run_benchmark(model, article_text, extraction_type="default"):
             "top_p": 0.6,
             "top_k": 30,
         }
-        # Optionally keep connection alive if needed
         extra_payload = {"keep_alive": "10m"}
     elif extraction_type == "nuextract":
         messages = get_nuextract_messages(article_text)
-        options = {
-            "temperature": 0.0
-        }
+        options = {"temperature": 0.0}
         extra_payload = {}
     else:
         raise ValueError("Unknown extraction type. Use 'default' or 'nuextract'.")
@@ -112,92 +107,129 @@ def run_benchmark(model, article_text, extraction_type="default"):
         "stream": False,
         "options": options,
     }
-    # Merge any extra payload items
     payload.update(extra_payload)
 
     url = "http://localhost:11434/api/chat"
     print(f"Benchmarking model: {model} | Tokens: {num_tokens}")
     start_time = time.time()
+
     try:
         response = requests.post(url, json=payload)
         elapsed = time.time() - start_time
+        raw_output = response.content.decode('utf-8')
+        try:
+            parsed_output = json.loads(raw_output)
+        except Exception as e:
+            parsed_output = f"ERROR: {str(e)} {raw_output}"
     except Exception as e:
-        print(f"Request failed: {e}")
         elapsed = None
+        raw_output = f"ERROR: {str(e)}"
+        parsed_output = raw_output
 
-    return {
+    result = {
         "model": model,
         "extraction_type": extraction_type,
         "num_tokens": num_tokens,
         "processing_time": elapsed,
-        "response_status": response.status_code if response is not None else None
+        "response_status": response.status_code if 'response' in locals() and response is not None else None,
+        "output": parsed_output
     }
+    return result
 
 # --- Main benchmark loop ---
 def main():
-    # Stop any running models
     stop_running_models()
 
-    # Define test texts – you can add more texts here
+    # Define test texts – add as many as needed
     texts = {
         "Article_1": "Not long after buying and publicly consuming a $6.2m banana as part of an artworld stunt, Chinese crypto entrepreneur Justin Sun made another eye-catching purchase, investing $30m ($23.5m) into a cryptocurrency firm called World Liberty Financial. The company had foundered since its October launch, investors seemingly leery of its prospects and its terms. But it boasted a potentially enticing feature: the chance to do business with a firm partnering with and promoted by none other than Donald Trump. ...",
         "Article_2": "Norway's Jakob Ingebrigtsen cruised to victory at the European Cross Country Championships in Turkey to claim the men's senior title for the third time in four years. The 24-year-old Olympic 5,000m champion chose not to compete in the event last year but reclaimed his crown with a dominant performance at Dokuma Park in Antalya. ...",
         "Article_3": "As Russia continues its aerial bombardment of Ukraine with drones and missiles, Ukraine has been successfully targeting the sources of some of those attacks. One of those was at Engels-2 Airbase, deep inside Russia and which is a key base for Moscow's strategic bombers and also serves as a refuelling point. ...",
         "Article_4": "With her award-winning Wolf Hall series of books, Hilary Mantel made Tudor bad guy Thomas Cromwell sympathetic. But as TV adaptation Wolf Hall: The Mirror and the Light premieres in the US, the question is: did she also 'sidestep crucial matters'? Nearly 500 years after his death, Thomas Cromwell lives again, reborn in the popular imagination ...",
-        "Article_5": "The Cook Islands is proving that sustainable tourism isn't just possible – it's essential. Here's how this South Pacific nation is preserving their paradise for generations for come. Landing on Rarotonga, the largest of the Cook Islands chain felt like stepping back in time. ...",
+        "Article_5": "The Cook Islands is proving that sustainable tourism isn't just possible – it's essential. Here's how this South Pacific nation is preserving their paradise for generations for come. Landing on Rarotonga, the largest of the Cook Islands chain felt like stepping back in time. ..."
     }
 
-    # Define models to test.
-    # You can mix and match between the two extraction types.
+    # Save the input articles to a JSONL file
+    input_filename = "inputs.jsonl"
+    with open(input_filename, "w", encoding="utf-8") as f:
+        for text_id, text in texts.items():
+            json_obj = {"text_id": text_id, "text": text}
+            f.write(json.dumps(json_obj) + "\n")
+    print(f"Saved input articles to {input_filename}")
+
     benchmarks = []
-    # For default extraction
+    # Define models to test
     default_models = [
-        "hf.co/jackboyla/Phi-3-mini-4k-instruct-graph-GGUF:Q8_0"
+        "hf.co/jackboyla/Phi-3-mini-4k-instruct-graph-GGUF:Q8_0",
+        "granite3.1-moe:1b-instruct-fp16",
+        "granite3.1-moe:3b-instruct-q8_0"
     ]
-    # For NuExtract extraction
     nuextract_models = [
         "hf.co/MaziyarPanahi/NuExtract-1.5-smol-GGUF:Q6_K"
     ]
 
-    # Run benchmarks for each text and each model type
-    for text_id, text in texts.items():
-        for model in default_models:
+    # Run benchmarks for each text and model
+    for model in default_models:
+        for text_id, text in texts.items():
             result = run_benchmark(model, text, extraction_type="default")
             result["text_id"] = text_id
             benchmarks.append(result)
-        for model in nuextract_models:
+    for model in nuextract_models:
+        for text_id, text in texts.items():
             result = run_benchmark(model, text, extraction_type="nuextract")
             result["text_id"] = text_id
             benchmarks.append(result)
 
-    # Print results
+    # Save outputs for each model to separate JSONL files
+    outputs_by_model = {}
+    for res in benchmarks:
+        model = res["model"]
+        outputs_by_model.setdefault(model, []).append(res)
+
+    output_dir = "outputs"
+    os.makedirs(output_dir, exist_ok=True)
+    for model, results in outputs_by_model.items():
+        safe_model_name = model.replace("/", "_").replace(":", "_")
+        output_filename = os.path.join(output_dir, f"outputs_{safe_model_name}.jsonl")
+        with open(output_filename, "w", encoding="utf-8") as f:
+            for res in results:
+                f.write(json.dumps(res) + "\n")
+        print(f"Saved outputs for model {model} to {output_filename}")
+
+    # Print benchmark results
     print("\nBenchmark Results:")
     for res in benchmarks:
-        print(f"Model: {res['model']} | Type: {res['extraction_type']} | {res['text_id']} | Tokens: {res['num_tokens']} | Time: {res['processing_time']:.2f}s | Status: {res['response_status']}")
+        proc_time = res['processing_time']
+        proc_time_str = f"{proc_time:.2f}s" if proc_time is not None else "N/A"
+        print(f"Model: {res['model']} | Type: {res['extraction_type']} | {res['text_id']} | Tokens: {res['num_tokens']} | Time: {proc_time_str} | Status: {res['response_status']}")
 
     # --- Plot processing time vs. token count ---
-    # Separate results by model (or extraction type) for clarity
     markers = {"default": "o", "nuextract": "s"}
-    colors = {"hf.co/jackboyla/Phi-3-mini-4k-instruct-graph-GGUF:Q8_0": "blue", 
-              "hf.co/MaziyarPanahi/NuExtract-1.5-smol-GGUF:Q6_K": "green"}
+    # Automatically generate colors for each unique model
+    unique_models = sorted({res["model"] for res in benchmarks})
+    colormap = plt.cm.get_cmap("tab20", len(unique_models))
+    colors = {model: colormap(i) for i, model in enumerate(unique_models)}
 
     plt.figure(figsize=(8, 6))
     for res in benchmarks:
-        plt.scatter(res["num_tokens"], res["processing_time"],
-                    marker=markers[res["extraction_type"]],
-                    color=colors.get(res["model"], "black"),
-                    s=100,
-                    label=f"{res['model']} ({res['extraction_type']})")
+        plt.scatter(
+            res["num_tokens"], res["processing_time"],
+            marker=markers[res["extraction_type"]],
+            color=colors.get(res["model"], "black"),
+            s=100,
+            label=f"{res['model']} ({res['extraction_type']})"
+        )
         plt.text(res["num_tokens"]+1, res["processing_time"]+0.1, res["text_id"], fontsize=8)
-    plt.xlabel("Approx. Token Count")
+    plt.xlabel("Approx. Prompt Token Count")
     plt.ylabel("Processing Time (seconds)")
-    plt.title("Processing Time vs. Number of Tokens")
-    # Remove duplicate legend entries
+    plt.title("Processing Time vs. Number of Prompt Tokens")
     handles, labels = plt.gca().get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
     plt.legend(by_label.values(), by_label.keys())
     plt.grid(True)
     plt.tight_layout()
+    os.makedirs("figs", exist_ok=True)
+    plt.savefig("figs/benchmark_results.png")
     plt.show()
 
 if __name__ == "__main__":
